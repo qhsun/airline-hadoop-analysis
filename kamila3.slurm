@@ -28,8 +28,6 @@
 
 # don't change this name without changing logger also
 #SBATCH --output=kamilaResults-%J.out
-#SBATCH --mail-user=ahfoss@buffalo.edu
-#SBATCH --mail-type=ALL
 
 # File to be clustered:
 # Data file is ./$DATADIR/$DATANAME
@@ -163,18 +161,6 @@ $HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR dfs -ls /data
 #
 # It can be regenerated as follows:
 # reconstitutedObj <- eval(parse(text=storedObj))
-
-# Design for kamila:
-# input csv dataset, no cluster memberships, and RData file with initial centers
-# Map/Reduce 1: calculate KDE of min distances
-# Map step 2: each data row is assigned a cluster
-#	output: <k \t csv data row>
-# Reduce step 2: each cluster is assigned a centroid
-#	output: <k \t deparsed R object describing cluster centroid>
-# Intermediary file after 2nd M-R step converts deparsed data to RData file
-# Each kamila run terminates after MAX_NITER iterations or when the centroids
-#	change by less than EPSILON_CON and EPSILON_CAT units; whichever
-#	happens first. See README.txt for details.
 
 
 ##################################################
