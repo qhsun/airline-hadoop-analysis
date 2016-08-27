@@ -1,0 +1,669 @@
+\documentclass{article}
+
+\title{KAMILA Clustering Results}
+\author{}
+%\date{}
+
+\usepackage[letterpaper, total={7in, 10in}]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{multirow} % for table cells spanning multiple rows
+
+% Create external files in this document.
+% used for biblio
+\usepackage{filecontents}
+
+%\usepackage[square,numbers]{natbib}
+%\bibliographystyle{plainnat} 
+
+% for double spacing
+%\usepackage{setspace}
+%\doublespacing
+
+\hypersetup{
+    linkcolor=,
+    colorlinks=true,
+    urlcolor=blue
+}
+
+\newcommand{\bs}[1]{\boldsymbol{#1}}
+\newcommand{\bx}{\boldsymbol{x}}
+
+
+
+% \tiny
+% \scriptsize
+% \footnotesize
+% \small
+% \normalsize
+% \large
+% \Large
+% \LARGE
+% \huge
+% \Huge 
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+\newpage
+
+\section{Initializations}
+
+
+<<init>>=
+#opts_knit$set(concordance=TRUE)
+#opts_knit$set(self.contained=FALSE)
+#opts_knit$set(tidy=TRUE)
+suppressMessages(library(xtable))
+suppressMessages(library(tools))
+suppressMessages(library(MASS)) # for ginv()
+suppressMessages(library(RSQLite)) # for ginv()
+#suppressMessages(library(ggplot2))
+sessionInfo()
+@
+
+
+\newpage
+\section{User-Supplied Values}
+
+Please specify the data set used and job number in the original .Rnw document:
+<<uservals>>=
+# The full data set file name
+dataName <- '../csv/cat1987-2008_v1_KAM_rmvna_norm.csv'
+dataBaseName <- '../db/cat1987-2008_v1.db'
+dataBaseTableName <- 'finalDataSet'
+JOBID = '1234567'
+# A subsampled version of the data set suitable for plotting
+subsampleDataFile = '../csv/subsampleContinuous_2000_cat1987-2008_v1_KAM_rmvna_norm.csv'
+
+# Connect to the corresponding database
+sqlite <- dbDriver("SQLite")
+currentDb <- dbConnect(sqlite,dataBaseName)
+dbListTables(currentDb)
+@
+
+\newpage
+\section{General Info}
+
+\subsection{Basic Dataset Information}
+
+<<fs,echo=FALSE>>=
+fileSize <- file.size(dataName)
+spl <- strsplit(dataName,split='norm')[[1]]
+#rowlogName <- paste(spl[1],'rowlog',spl[2],sep='')
+nLines <- dbGetQuery(currentDb, paste("SELECT count(*) FROM", dataBaseTableName))
+nLines <- as.numeric(nLines)
+@
+
+The data file is \Sexpr{fileSize/1024^3} GiB and \Sexpr{fileSize/1000^3} GB (\Sexpr{fileSize} bytes), with \Sexpr{nLines} data lines.
+
+%%%%%%% Add info on missing vars from preprocessing step
+<<basicDataInfo,echo=FALSE>>=
+conVarInfo <- dbGetQuery(currentDb, paste("SELECT * FROM conStats"))
+numConVar <- nrow(conVarInfo)
+outputFileName <- paste('output-kamila-',JOBID,sep='')
+
+#catVarInfo <- read.table(paste(spl[1],'catstats.',dataExt,sep=''),header=TRUE,sep='\t')
+catVarInfo <- dbGetQuery(currentDb, paste("SELECT * FROM catSummary"))
+
+levCounts <- as.numeric(unlist(strsplit(as.vector(catVarInfo$LevCounts),split=',')))
+levPcts <- levCounts / nLines * 100
+
+catInfoTable <- data.frame(
+  VariableName = with(catVarInfo,rep(VarName,times=NumLev)),
+  LevelName = unlist(strsplit(as.vector(catVarInfo$LevNames),split=',')),
+  Counts = levCounts,
+  Percent = levPcts
+)
+@
+
+<<printBasicConDataInfo,echo=FALSE,results='asis'>>=
+print(
+  xtable(
+    conVarInfo,
+    digits = c(0,0,0,0,-2,-2,-2,-2),
+    caption=c("Summary statistics for continuous variables. Note: statistics calculated before standardizing to mean 0 and sd 1","Basic Continuous Variable Info")
+  ),
+  include.rownames=FALSE
+)
+@
+
+<<printBasicCatDataInfo,echo=FALSE,results='asis'>>=
+print(
+  xtable(
+    catInfoTable,
+    digits = c(0,0,0,0,1),
+    caption=c("Summary statistics for categorical variables.","Basic Categorical Variable Info")
+  ),
+  include.rownames=FALSE
+)
+@
+
+\newpage
+\clearpage
+\subsection{Basic Kamila Info}
+% basic run info: # runs, # iter, # clust
+<<runInfo,echo=TRUE>>=
+runDirs <- list.files(
+  path = file.path('..',outputFileName),
+  pattern = 'run_[0-9]+'
+)
+
+# Sort by numerical order [1,2,3,...], not alpha order [1,10,2,3,...]
+runDirs <- runDirs[order(nchar(runDirs),runDirs)]
+
+runInfo <- data.frame(
+  run = 1:length(runDirs),
+  numIter = NA,
+  numClust = NA
+)
+
+iterDirs <- list()
+for (i in 1:length(runDirs)) {
+  # Get names of this run's iteration-specific directories
+  iterDirs[[i]] <- list.files(
+    path = file.path('..',outputFileName,runDirs[i]),
+    pattern = 'iter_[0-9]+',
+    full.names = TRUE
+  )
+  runInfo$numIter[i] <- length(iterDirs[[i]]) - 1
+}
+
+objValues <- list()
+for (i in 1:length(runDirs)) {
+  # Get number of iterations, counting "zeroth" initialization, and objective
+  # function from final iteration
+  nIter_i <- length(iterDirs[[i]])
+  sortedIterDirs <- iterDirs[[i]][order(nchar(iterDirs[[i]]), iterDirs[[i]])]
+  objFileName <- list.files(
+    path = sortedIterDirs[[nIter_i]],
+    pattern = 'currentObjective',
+    full.names = TRUE
+  )
+  # insert try catch run here:
+  objValues[[i]] <- tryCatch(
+    expr = read.table(objFileName,sep=",",header=TRUE),
+    error = function(e) return(NULL)
+  )
+}
+objFileName
+str(objValues)
+objValues
+
+allClusteringInfo <- list()
+allRunInfo <- list()
+for (i in 1:length(runDirs)) {
+  # Get total wss file pathways
+  finalStatsFile <- list.files(
+      path = file.path('..',outputFileName,runDirs[i],'stats'),
+      pattern = 'finalRunStats.RData',
+      full.names = TRUE
+    )
+  tryCatch(
+    expr = {
+      load(finalStatsFile)
+      allClusteringInfo[[i]] <- clustSummary
+      allRunInfo[[i]] <- runSummary
+    },
+    error = function(e) {
+      warning('Could not load "finalRunStats.RData" for run number ',i)
+    }
+  )
+}
+if (length(allClusteringInfo) < nrow(runInfo)) {
+  allClusteringInfo[[nrow(runInfo)]] <- NA
+}
+if (length(allRunInfo) < nrow(runInfo)) {
+  allRunInfo[[nrow(runInfo)]] <- NA
+}
+
+# Get metrics of cluster quality
+clusterQuality <- lapply(
+  allRunInfo,
+  function(elm) {
+    vec <- unlist(elm); names(vec) <- names(elm); return(vec) 
+  }
+)
+clusterQuality <- data.frame(do.call(rbind,clusterQuality))
+
+# Get number of clusters in final iteration of each KAMILA run
+runInfo$numClust <- sapply(allClusteringInfo, length)
+
+runInfo <- cbind(
+  runInfo,
+  clusterQuality
+  )
+#runInfo <- runInfo[order(runInfo$clusterQualityMetric,decreasing=TRUE),]
+
+#for (i in 1:length(runDirs)) {
+#  # Get pathway to cluster-specific info
+#  clusterSsFiles <- list.files(
+#    path = file.path('..',outputFileName,runDirs[i],'stats'),
+#    pattern = 'clusterStats.tsv',
+#    full.names = TRUE
+#  )
+#  # Log info in data frame
+#  nrowClusterFiles <- nrow(read.table(clusterSsFiles)) - 1
+#  runInfo$numClust[i] <- ifelse(
+#    test = nrowClusterFiles <= 1,
+#    yes = NA,
+#    no = nrowClusterFiles
+#  )
+#}
+@
+
+<<printRunInfo, echo=FALSE, results='asis'>>=
+print(
+  xtable(
+    runInfo,digits=c(0,0,0,0,-2,-2,-2),
+    caption = c('Basic kamila info')
+  ),
+  include.rownames=FALSE
+)
+@
+
+\newpage
+\section{Cluster info}
+
+\subsection{Overall Clustering Stats}
+% size, wss, other measures for each cluster, bss
+% table with cluster by row, stat by column
+<<clustinf,echo=FALSE>>=
+best_run <- which.max(runInfo$clusterQualityMetric)
+
+clustInfoTab <- sapply(
+  allClusteringInfo[[best_run]],
+  function(elm) {
+    with(elm, c(count,totalDistToCentroid, totalCatLogLik))
+  }
+)
+clustInfoTab <- rbind(1:runInfo$numClust[best_run], clustInfoTab)
+rownames(clustInfoTab) <- c('ClusterNumber','Count','totalEucDistToCentroid','totalCatLogLik')
+clustInfoTab <- data.frame(t(clustInfoTab))
+
+#allStats  <- read.table(
+#  file.path('..',outputFileName,paste('run_',best_run,sep=''),'stats','clusterStats.tsv'),
+#  header = TRUE,
+#  stringsAsFactors = FALSE
+#)
+#allStats$relativeSize <- paste( round(allStats[,'ClusterSize'] / sum(allStats[,'ClusterSize']) * 100,1) , '%', sep='')
+#allStats$wssPerN <- allStats[,'SSQ'] / allStats[,'ClusterSize']
+#
+#clustInfoTab <- allStats[,c('ClusterNumber','ClusterSize','relativeSize','SSQ','wssPerN')]
+#colnames(clustInfoTab) <- c('Cluster Number','Cluster Size','Relative Size','Within-Cluster SS','WSS per point')
+@
+
+<<printClustInf, echo=FALSE, results='asis'>>=
+print(
+  xtable(
+    clustInfoTab,
+    digits=c(0,0,0,-2,-2),
+    caption=paste('Cluster-specific information for the best kamila run, run ', best_run, '.', sep='')
+  ),
+  include.rownames=FALSE
+)
+@
+
+\clearpage
+\newpage
+\subsection{Centroid Trajectories}
+
+% Show evolution of centroids for best run, over scatterplot of PCs 1 and 2
+\begin{figure}[!h]
+\begin{center}
+<<centroidIter,echo=FALSE>>=
+# get subsampled data and rescale
+subsamp <- read.csv(subsampleDataFile)
+datMeans <- colMeans(subsamp)
+datSds <- apply(subsamp,2,sd)
+datSds[datSds==0] <- 1 # for cols with no variance
+subsamp <- scale(subsamp, center=datMeans, scale=datSds)
+subsampCon <- subsamp[,1:numConVar]
+
+# SVD of continuous data for plotting
+svdDat <- svd(subsampCon)
+# X = UDV'
+# X (DV')^-1 = U
+transMat <- ginv(diag(svdDat$d) %*% t(svdDat$v))
+# Expand to zero out categoricals (for now)
+transMat <- rbind(transMat,matrix(0,nrow=ncol(subsamp) - numConVar,ncol=ncol(transMat)))
+
+# get centroid file names in appropriate format
+centroidFileNames <- list.files(
+  file.path('..',outputFileName,paste('run_',best_run,sep='')),
+  pattern = 'currentMeans_i',
+  recursive = TRUE,
+  full.names = TRUE
+)
+centroidFileNames <- as.vector(centroidFileNames)
+centroidFileNames <- centroidFileNames[order(nchar(centroidFileNames), centroidFileNames)]
+
+# read in centroids and scale by dataset's means
+allCentroids <- lapply(
+  centroidFileNames,
+  FUN = function(ff) {
+    if (exists('myMeans')) rm(myMeans)
+    load(ff)
+    dd=t(sapply(myMeans, function(elm) elm$centroid))
+    dd <- scale(dd, center=datMeans, scale=datSds)
+    rownames(dd) <- paste('Clust',1:nrow(dd))
+    colnames(dd) <- paste('Dim',1:ncol(dd))
+    return(dd)
+  }
+)
+
+thisNumIter <- length(allCentroids)
+thisNumClust <- nrow(allCentroids[[1]])
+
+# distinct colors for the clusters
+myColors <- rainbow(thisNumClust)
+myColorsAlpha <- rainbow(thisNumClust,alpha=0.5)
+
+# Color points by nearest cluster
+# Inefficient one-liner implementation: fix this
+datColors <- t(apply(
+  subsamp,
+  1,
+  function(rr) which.min(as.matrix(dist(rbind(rr,allCentroids[[thisNumIter]])))[-1,1])
+))
+
+# create plot
+plot(
+  svdDat$u,
+  xlab='Principal Component 1',
+  ylab='Principal Component 2',
+  col = myColorsAlpha[datColors]
+)
+
+for (i in 1:thisNumIter) {
+  transCentroids <- allCentroids[[i]] %*% transMat
+  points(transCentroids, pch=19, col=myColors, cex=2.5)
+  points(transCentroids, pch=1, col='black', cex=2.5, lwd=2)
+  text(transCentroids, labels=i-1,cex=0.8)
+}
+
+legend(
+  x = 'topright',
+  title = 'Cluster #',
+  pch = 19,
+  col = myColors,
+  legend = 1:thisNumClust
+)
+@
+\end{center}
+\caption[Centroid position by iteration]{The evolution of the centroid position in the best run. Filled circles denote centroids, with the contained number denoting iteration number. Individual observations (random subset) are plotted with hollow circles, with final cluster membership given by color of the plotting character.}
+\end{figure}
+
+<<loadings,echo=FALSE>>=
+#svdDat$d^2
+totalVar <- svdDat$d^2 / sum(svdDat$d^2)
+#totalVar
+firstTwo <- sum(totalVar[1:2])
+#firstTwo
+#conVarInfo
+loads <- data.frame(
+  Variable.Index = conVarInfo$VarIndex,
+  Variable.Name = conVarInfo$VarName,
+  PC1 = svdDat$v[,1],
+  PC2 = svdDat$v[,2]
+)
+#loads
+# pct variance in 1st two pcs
+@
+
+<<printLoads,echo=FALSE,results='asis'>>=
+print(
+  xtable(
+    loads,
+    table.placement = 'h!',
+    digits = c(0,0,0,3,3),
+    caption = paste('Loadings of variables on PCs 1 and 2.',c(paste('The first two PCs account for',round(firstTwo*100,1),'\\% of the variance'),''))
+  ),
+  include.rownames = FALSE
+)
+@
+
+
+
+\clearpage
+\newpage
+\subsection{Continuous Parameter Change Plots}
+% ||B_i - B_{i-1}|| line plot -- value versus iteration number
+% best run in black, other runs in gray
+\begin{figure}[!h]
+\begin{center}
+<<conParamDiffs,echo=FALSE>>=
+maxConObjValue <- max(
+  sapply(
+    objValues,
+    function(elm) {
+      if ( length(elm$condiff) == 1 && is.na(elm$condiff) ) {
+        return(-Inf)
+      } else {
+        return(max(elm$condiff,na.rm=TRUE))
+      }
+    }
+  )
+)
+maxNumIter  <- max(sapply(objValues,function(elm) length(elm$condiff)))
+par(mar = c(5,5,4,2) + 0.1)
+plot(
+  1:maxNumIter,
+  ylim = c(0,maxConObjValue),
+  type = 'n',
+  xlab = 'Iteration Number',
+  ylab = expression(Sigma ~ bgroup("|", mu[i] ~ - ~ mu[i-1], "|"))
+)
+for (i in 1:length(objValues)) {
+  if (is.na(objValues[[i]][['condiff']][1])) next
+  lines(1:length(objValues[[i]][['condiff']]),objValues[[i]][['condiff']],col='gray')
+}
+# redraw best run so it is superimposed over others
+lines(1:length(objValues[[best_run]][['condiff']]),objValues[[best_run]][['condiff']],col='black')
+@
+\end{center}
+\caption[Objective function plot]{Plot of L1 distance between centroids in successive iterations. The final selected run is plotted in black, while other runs are plotted in gray.}
+\end{figure}
+
+
+\begin{figure}
+\begin{center}
+<<logConParamDiffs,echo=FALSE>>=
+minConObjValue <- min(
+  sapply(
+    objValues,
+    function(elm) {
+      if ( length(elm$condiff) == 1 && is.na(elm$condiff) ) {
+        return(Inf)
+      } else {
+        return(min(elm$condiff,na.rm=TRUE))
+      }
+    }
+  )
+)
+par(mar = c(5,5,4,2) + 0.1)
+plot(
+  1:maxNumIter,
+  ylim = c(log(minConObjValue,base=10),log(maxConObjValue,base=10)),
+  type = 'n',
+  xlab = 'Iteration Number',
+  ylab = expression(log ~ bgroup("(", ~ Sigma ~ bgroup("|", mu[i] ~ - ~ mu[i-1], "|"),")"))
+)
+for (i in 1:length(objValues)) {
+  if (is.na(objValues[[i]][['condiff']][1])) next
+  lines(1:length(objValues[[i]][['condiff']]),log(objValues[[i]][['condiff']],base=10),col='gray')
+}
+lines(1:length(objValues[[best_run]][['condiff']]),log(objValues[[best_run]][['condiff']],base=10),col='black')
+@
+\end{center}
+\caption[Objective function plot, log-scale]{Plot of log (base 10) of L1 distance between centroids in successive iterations. The final selected run is plotted in black, while other runs are plotted in gray.}
+\end{figure}
+
+
+
+\clearpage
+\newpage
+\subsection{Categorical Parameter Change Plots}
+% ||B_i - B_{i-1}|| line plot -- value versus iteration number
+% best run in black, other runs in gray
+\begin{figure}[!h]
+\begin{center}
+<<catParamDiffs,echo=FALSE>>=
+maxCatObjValue <- max(
+  sapply(
+    objValues,
+    function(elm) {
+      if ( length(elm$catdiff) == 1 && is.na(elm$catdiff) ) {
+        return(-Inf)
+      } else {
+        return(max(elm$catdiff,na.rm=TRUE))
+      }
+    }
+  )
+)
+maxNumIter  <- max(sapply(objValues,function(elm) length(elm$catdiff)))
+par(mar = c(5,5,4,2) + 0.1)
+plot(
+  1:maxNumIter,
+  ylim = c(0,maxCatObjValue),
+  type = 'n',
+  xlab = 'Iteration Number',
+  ylab = expression(Sigma ~ bgroup("|", theta[i] ~ - ~ theta[i-1], "|"))
+)
+for (i in 1:length(objValues)) {
+  if (is.na(objValues[[i]][['catdiff']][1])) next
+  lines(1:length(objValues[[i]][['catdiff']]),objValues[[i]][['catdiff']],col='gray')
+}
+# redraw best run so it is superimposed over others
+lines(1:length(objValues[[best_run]][['catdiff']]),objValues[[best_run]][['catdiff']],col='black')
+@
+\end{center}
+\caption[Objective function plot]{Plot of L1 distance between centroids in successive iterations. The final selected run is plotted in black, while other runs are plotted in gray.}
+\end{figure}
+
+
+\begin{figure}
+\begin{center}
+<<logCatParamDiffs,echo=FALSE>>=
+minCatObjValue <- min(
+  sapply(
+    objValues,
+    function(elm) {
+      if ( length(elm$catdiff) == 1 && is.na(elm$catdiff) ) {
+        return(Inf)
+      } else {
+        return(min(elm$catdiff,na.rm=TRUE))
+      }
+    }
+  )
+)
+par(mar = c(5,5,4,2) + 0.1)
+plot(
+  1:maxNumIter,
+  ylim = c(log(minCatObjValue,base=10),log(maxCatObjValue,base=10)),
+  type = 'n',
+  xlab = 'Iteration Number',
+  ylab = expression(log ~ bgroup("(", ~ Sigma ~ bgroup("|", theta[i] ~ - ~ theta[i-1], "|"),")"))
+)
+for (i in 1:length(objValues)) {
+  if (is.na(objValues[[i]][['catdiff']][1])) next
+  lines(1:length(objValues[[i]][['catdiff']]),log(objValues[[i]][['catdiff']],base=10),col='gray')
+}
+lines(1:length(objValues[[best_run]][['catdiff']]),log(objValues[[best_run]][['catdiff']],base=10),col='black')
+@
+\end{center}
+\caption[Objective function plot, log-scale]{Plot of log (base 10) of L1 distance between centroids in successive iterations. The final selected run is plotted in black, while other runs are plotted in gray.}
+\end{figure}
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% modified kmeans -> kamila up to here %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\newpage
+\section{Variable-Specific Clustering Stats}
+
+% variable specific cluster info: mean, sd, min, max
+% table with cluster by row, stat by column, one table per variable
+<<varStats,echo=FALSE>>=
+minMat <- t(sapply(allClusteringInfo[[best_run]],function(elm) elm$con$min))
+maxMat <- t(sapply(allClusteringInfo[[best_run]],function(elm) elm$con$max))
+meanMat <- t(sapply(allClusteringInfo[[best_run]],function(elm) elm$con$means))
+
+#catVarNames <- names(allClusteringInfo[[best_run]][[1]][['catfreq']])
+catVarNames <- catVarInfo$VarName
+
+catVarStats <- list()
+
+for (i in 1:length(catVarNames)) {
+  ithVar <- t(sapply(
+    allClusteringInfo[[best_run]],
+    function(elm) elm$catfreq[[catVarNames[i]]]
+  ))
+  if (1==nrow(ithVar)) ithVar <- matrix(ithVar)
+  rownames(ithVar) <- paste('Clust',1:nrow(ithVar),sep='')
+  ithNames <- unlist(strsplit(
+    catVarInfo$LevNames[catVarInfo$VarName==catVarNames[i]],
+    split=','
+  ))
+  colnames(ithVar) <- ithNames
+  ithVar <- ithVar[,order(ithNames)]
+  catVarStats[[catVarNames[i]]] <- ithVar
+}
+
+allVarNames <- colnames(subsamp)
+@
+
+<<showVarStats,echo=FALSE,results='asis'>>=
+tabCounter <- 0
+numTablesPerPage <- 3
+for (varNum in 1:ncol(minMat)) {
+  print(
+    xtable(
+      data.frame(
+        clusterNumber = 1:nrow(minMat),
+        min = minMat[,varNum] * conVarInfo[varNum,'StandardDeviation'] + conVarInfo[varNum,'Mean'],
+        mean = meanMat[,varNum] * conVarInfo[varNum,'StandardDeviation'] + conVarInfo[varNum,'Mean'],
+        max = maxMat[,varNum] * conVarInfo[varNum,'StandardDeviation'] + conVarInfo[varNum,'Mean']
+      ),
+      digits = c(0,0,3,3,3),
+      caption = paste('Cluster-specific stats for continuous variable ',varNum,', ',allVarNames[varNum],'.',sep='')
+    ),
+    include.rownames = FALSE
+  )
+  tabCounter = tabCounter + 1
+  if (tabCounter %% numTablesPerPage == 0) cat('\n\\clearpage\n')
+}
+
+for (i in 1:length(catVarStats)) {
+  print(
+    xtable(
+      catVarStats[[i]] ,
+      digits = c(0,rep(3,ncol(catVarStats[[i]]))),
+      caption = paste('Cluster-specific stats for categorical variable ',i,', ',names(catVarStats)[i],'.',sep='')
+    ),
+    include.rownames = TRUE
+  )
+  tabCounter = tabCounter + 1
+  if (tabCounter %% numTablesPerPage == 0) cat('\n\\clearpage\n')
+}
+@
+
+<<saveall>>=
+save.image('SummaryInfo.RData')
+@
+
+
+\end{document}
