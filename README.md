@@ -4,7 +4,8 @@
     # package on [github](github.com). See the associated README file for that
     # package for more information including software dependencies.
 
-    # To replicate the analysis, run the commands below.
+    # To replicate the analysis from the manuscript by Foss & Markatou entitled
+    # "Clustering Mixed-Type Data in R and Hadoop", run the commands below.
 
 ## Analysis pipeline:
 
@@ -36,4 +37,7 @@
     pdflatex kamilaSummary.tex
     !!
     evince kamilaSummary.pdf &
+
+    # Code for generating table 9 in the manuscript:
+    sqlite3 db/cat1987-2008_v1.db "SELECT origin, AVG(depdelay) FROM finaldataset GROUP BY origin;"
 
