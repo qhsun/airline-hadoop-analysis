@@ -1,10 +1,8 @@
 #!/bin/bash
-#SBATCH --output=preprocessingResults-%J.out
-#SBATCH --job-name=procJob
+#SBATCH --output=makeRnwResults-%J.out
+#SBATCH --job-name=rnwJob
 #SBATCH --cpus-per-task=1
 #SBATCH --nodes=1
-#SBATCH --mail-user=ahfoss@buffalo.edu
-#SBATCH --mail-type=ALL
 #SBATCH --partition=debug
 #SBATCH --time=00:55:00
 ##SBATCH --partition=general-compute

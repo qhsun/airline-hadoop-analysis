@@ -32,6 +32,7 @@
     # Modify JOBID variable in the section "User-Supplied Values" in
     # kamilaSummary.Rnw to be the SLURM job ID used in kamila.slurm.
     Rscript -e "require(knitr);knit('kamilaSummary.Rnw')"
+    # (Document may be knit using Rnw/makeRnw.slurm instead.)
     pdflatex kamilaSummary.tex
     !!
     evince kamilaSummary.pdf &
